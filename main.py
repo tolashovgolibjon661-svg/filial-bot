@@ -12,7 +12,7 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 app = Flask(__name__)
 
 @app.route('/')
-function_index():
+def function_index():
     return "Bot ishlayapti va uyg'oq!"
 
 @app.route('/health')
