@@ -7,8 +7,6 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
-import gspread
-from google.oauth2.service_account import Credentials
 
 # --- RENDER UCHUN FLASK SERVER (Uyg'oq saqlash uchun) ---
 app = Flask(__name__)
@@ -56,20 +54,9 @@ PRODUCTS = [
     "Fri mini karobka", "Kids boxs karobka", "stiker", "zubachistka", "salat idish"
 ]
 
-# Google Sheets bilan bog'lanish funksiyasi
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-
-def get_sheet_data():
-    try:
-        # Render yoki papkada credentials.json fayli bo'lsa ishlaydi
-        if os.path.exists("credentials.json"):
-            creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
-            client = gspread.authorize(creds)
-            sheet = client.open("Feel Food sklad").sheet1
-            return sheet.get_all_records()
-    except Exception as e:
-        print(f"Google Sheets o'qishda xatolik: {e}")
-    return None
+# Xotirada qoldiqlarni saqlash uchun baza (Boshlang'ich qiymat: 0 dona)
+# Har bir filial va mahsulot uchun 0 dan boshlanadi
+DATABASE = {filial: {product: 0 for product in PRODUCTS} for filial in FILIALS}
 
 class SkladState(StatesGroup):
     choosing_action = State()
@@ -110,27 +97,13 @@ async def select_action(message: types.Message, state: FSMContext):
         async with state.proxy() as data:
             filial = data.get('filial', 'Filial')
         
-        await message.answer(f"⏳ **{filial}** filiali bo'yicha qoldiqlar yuklanmoqda...")
+        filial_stocks = DATABASE.get(filial, {})
+        text = f"📦 **{filial} filiali bo'yicha joriy qoldiqlar:**\n\n"
         
-        records = get_sheet_data()
-        if records:
-            filial_records = [r for r in records if str(r.get('Filial', '')).strip().lower() == filial.lower()]
-            if filial_records:
-                text = f"📦 **{filial} filiali bo'yicha qoldiqlar:**\n\n"
-                for r in filial_records:
-                    product_name = r.get('Mahsulot', 'Nomaʼlum')
-                    qty = r.get('Miqdor', 0)
-                    text += f"▪️ {product_name}: **{qty} dona**\n"
-                await message.answer(text, parse_mode="Markdown")
-            else:
-                await message.answer(f"📦 **{filial} filiali qoldiqlari:**\n\nJadvalda bu filial uchun hali ma'lumot topilmadi.", parse_mode="Markdown")
-        else:
-            await message.answer(
-                f"📦 **{filial} filiali bo'yicha qoldiqlar:**\n\n"
-                f"Google Sheets (Excel) jadvali ulanmagan yoki 'credentials.json' fayli topilmadi.\n"
-                f"Jadval ulangach, barcha mahsulotlar qoldig'i shu yerda ko'rinadi!",
-                parse_mode="Markdown"
-            )
+        for product, qty in filial_stocks.items():
+            text += f"▪️ {product}: **{qty} dona**\n"
+            
+        await message.answer(text, parse_mode="Markdown")
         return
     
     if message.text not in ["➕ Kirim qilish (Qo'shish)", "➖ Chiqim qilish (Berish)"]:
@@ -182,6 +155,12 @@ async def save_to_group(message: types.Message, state: FSMContext):
         filial = data['filial']
         action = data['action']
         product = data['product']
+
+    # Qoldiqlarni avtomatik yangilash
+    if action == "➕ Kirim qilish (Qo'shish)":
+        DATABASE[filial][product] += amount
+    elif action == "➖ Chiqim qilish (Berish)":
+        DATABASE[filial][product] = max(0, DATABASE[filial][product] - amount)
 
     now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     user_name = message.from_user.full_name
