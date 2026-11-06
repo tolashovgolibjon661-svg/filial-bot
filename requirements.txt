@@ -1,7 +1,5 @@
-setuptools
-wheel
 aiogram==2.25.1
-aiohttp==3.9.1
 flask
+
 
 
