@@ -1,15 +1,34 @@
 import logging
 import datetime
+import os
+import threading
+from flask import Flask
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
 
-# 1. Bot tokeningizni shu yerga yozing (BotFather'dan olgan)
+# --- RENDER UCHUN FLASK SERVER (Uyg'oq saqlash uchun) ---
+app = Flask(__name__)
+
+@app.route('/')
+function_index():
+    return "Bot ishlayapti va uyg'oq!"
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+# --------------------------------------------------------
+
+# 1. Bot tokeningizni shu yerga yozing
 TOKEN = "9104508816:AAEDOdUYjtEFKNZeO6FbAFdWhJLQe9oxIK8"
 
 # 2. Ma'lumotlar borib tushadigan Telegram guruhning ID raqami 
-GROUP_ID = -4290725255  # <--- Shu yerga o'z guruhingiz ID raqamini yozasiz
+GROUP_ID = -4290725255  # <--- O'z guruhingiz ID raqamini yozing
 
 bot = Bot(token=TOKEN)
 storage = MemoryStorage()
@@ -152,5 +171,11 @@ async def save_to_group(message: types.Message, state: FSMContext):
     )
 
 if __name__ == '__main__':
+    # Flask serverni alohida oqimda (thread) ishga tushiramiz
+    t = threading.Thread(target=run_web)
+    t.daemon = True
+    t.start()
+    
+    # Botni ishga tushiramiz
     executor.start_polling(dp, skip_updates=True)
-      
+    
