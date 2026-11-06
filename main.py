@@ -7,6 +7,8 @@ from aiogram import Bot, Dispatcher, executor, types
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
+import gspread
+from google.oauth2.service_account import Credentials
 
 # --- RENDER UCHUN FLASK SERVER (Uyg'oq saqlash uchun) ---
 app = Flask(__name__)
@@ -24,11 +26,11 @@ def run_web():
     app.run(host="0.0.0.0", port=port)
 # --------------------------------------------------------
 
-# 1. Bot tokeningizni shu yerga yozing
+# 1. Bot tokeningiz
 TOKEN = "9104508816:AAEDOdUYjtEFKNZeO6FbAFdWhJLQe9oxIK8"
 
 # 2. Ma'lumotlar borib tushadigan Telegram guruhning ID raqami 
-GROUP_ID = -4290725255  # <--- O'z guruhingiz ID raqamini yozing
+GROUP_ID = -4290725255
 
 bot = Bot(token=TOKEN)
 storage = MemoryStorage()
@@ -40,7 +42,7 @@ FILIALS = [
     "Uychi", "Chorsu", "Uchqoʻrgʻon"
 ]
 
-# Mahsulotlar ro'yxati
+# Mahsulotlar ro'yxati (37 xil)
 PRODUCTS = [
     "Pitsa karobka katta", "Pitsa karobka kichik", "Toʻrt karobka",
     "Perojni katta karobka", "Perojni kichik karobka", "Tandir lavash",
@@ -53,6 +55,21 @@ PRODUCTS = [
     "Saboy salafan paket 3kg", "Pitsa paket salafan", "patnistga fergament",
     "Fri mini karobka", "Kids boxs karobka", "stiker", "zubachistka", "salat idish"
 ]
+
+# Google Sheets bilan bog'lanish funksiyasi
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+
+def get_sheet_data():
+    try:
+        # Render yoki papkada credentials.json fayli bo'lsa ishlaydi
+        if os.path.exists("credentials.json"):
+            creds = Credentials.from_service_account_file("credentials.json", scopes=SCOPES)
+            client = gspread.authorize(creds)
+            sheet = client.open("Feel Food sklad").sheet1
+            return sheet.get_all_records()
+    except Exception as e:
+        print(f"Google Sheets o'qishda xatolik: {e}")
+    return None
 
 class SkladState(StatesGroup):
     choosing_action = State()
@@ -77,6 +94,7 @@ async def select_filial(message: types.Message, state: FSMContext):
     
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     keyboard.add(types.KeyboardButton("➕ Kirim qilish (Qo'shish)"), types.KeyboardButton("➖ Chiqim qilish (Berish)"))
+    keyboard.add(types.KeyboardButton("📦 Qoldiq"))
     keyboard.add(types.KeyboardButton("🔙 Orqaga / Bosh menu"))
     
     await state.set_state(SkladState.choosing_action.state)
@@ -87,6 +105,33 @@ async def select_action(message: types.Message, state: FSMContext):
     if message.text == "🔙 Orqaga / Bosh menu":
         await state.finish()
         return await send_welcome(message)
+    
+    if message.text == "📦 Qoldiq":
+        async with state.proxy() as data:
+            filial = data.get('filial', 'Filial')
+        
+        await message.answer(f"⏳ **{filial}** filiali bo'yicha qoldiqlar yuklanmoqda...")
+        
+        records = get_sheet_data()
+        if records:
+            filial_records = [r for r in records if str(r.get('Filial', '')).strip().lower() == filial.lower()]
+            if filial_records:
+                text = f"📦 **{filial} filiali bo'yicha qoldiqlar:**\n\n"
+                for r in filial_records:
+                    product_name = r.get('Mahsulot', 'Nomaʼlum')
+                    qty = r.get('Miqdor', 0)
+                    text += f"▪️ {product_name}: **{qty} dona**\n"
+                await message.answer(text, parse_mode="Markdown")
+            else:
+                await message.answer(f"📦 **{filial} filiali qoldiqlari:**\n\nJadvalda bu filial uchun hali ma'lumot topilmadi.", parse_mode="Markdown")
+        else:
+            await message.answer(
+                f"📦 **{filial} filiali bo'yicha qoldiqlar:**\n\n"
+                f"Google Sheets (Excel) jadvali ulanmagan yoki 'credentials.json' fayli topilmadi.\n"
+                f"Jadval ulangach, barcha mahsulotlar qoldig'i shu yerda ko'rinadi!",
+                parse_mode="Markdown"
+            )
+        return
     
     if message.text not in ["➕ Kirim qilish (Qo'shish)", "➖ Chiqim qilish (Berish)"]:
         await message.answer("Iltimos, tugmalardan birini tanlang!")
@@ -111,6 +156,7 @@ async def select_product(message: types.Message, state: FSMContext):
             filial_name = data.get('filial', FILIALS[0])
         keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
         keyboard.add(types.KeyboardButton("➕ Kirim qilish (Qo'shish)"), types.KeyboardButton("➖ Chiqim qilish (Berish)"))
+        keyboard.add(types.KeyboardButton("📦 Qoldiq"))
         keyboard.add(types.KeyboardButton("🔙 Orqaga / Bosh menu"))
         await message.answer(f"Siz **{filial_name}**dasiz. Amalni tanlang:", reply_markup=keyboard, parse_mode="Markdown")
         return
@@ -171,11 +217,9 @@ async def save_to_group(message: types.Message, state: FSMContext):
     )
 
 if __name__ == '__main__':
-    # Flask serverni alohida oqimda (thread) ishga tushiramiz
     t = threading.Thread(target=run_web)
     t.daemon = True
     t.start()
     
-    # Botni ishga tushiramiz
     executor.start_polling(dp, skip_updates=True)
     
